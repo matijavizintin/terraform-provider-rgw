@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ceph/go-ceph/rgw/admin"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/smithy-go"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -28,8 +30,9 @@ type BucketResource struct {
 }
 
 type BucketResourceModel struct {
-	Id   types.String `tfsdk:"id"`
-	Name types.String `tfsdk:"name"`
+	Id       types.String `tfsdk:"id"`
+	Name     types.String `tfsdk:"name"`
+	Location types.String `tfsdk:"location"`
 }
 
 func (r *BucketResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -51,6 +54,13 @@ func (r *BucketResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Bucket Name",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"location": schema.StringAttribute{
+				MarkdownDescription: "Bucket Location",
+				Optional:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -91,6 +101,11 @@ func (r *BucketResource) Create(ctx context.Context, req resource.CreateRequest,
 	s3req := &s3.CreateBucketInput{
 		Bucket: aws.String(data.Name.ValueString()),
 	}
+	if !data.Location.IsNull() {
+		s3req.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{
+			LocationConstraint: s3types.BucketLocationConstraint(data.Location.ValueString()),
+		}
+	}
 
 	tflog.Info(ctx, fmt.Sprintf("create bucket %s", *s3req.Bucket))
 
@@ -118,12 +133,12 @@ func (r *BucketResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	// Create Head Bucket Request
-	s3req := &s3.HeadBucketInput{
+	// get bucket zonegroup
+	s3req := &s3.GetBucketLocationInput{
 		Bucket: aws.String(data.Id.ValueString()),
 	}
 
-	_, err := r.client.S3.HeadBucket(ctx, s3req)
+	s3resp, err := r.client.S3.GetBucketLocation(ctx, s3req)
 	if err != nil {
 		var ae smithy.APIError
 		if errors.As(err, &ae) {
@@ -132,15 +147,33 @@ func (r *BucketResource) Read(ctx context.Context, req resource.ReadRequest, res
 				resp.State.RemoveResource(ctx)
 				return
 			case "403":
-				resp.Diagnostics.AddError("no permission to head bucket", err.Error())
+				resp.Diagnostics.AddError("no permission to get bucket", err.Error())
 				return
 			}
 		}
-		resp.Diagnostics.AddError("could not head bucket", err.Error())
+		resp.Diagnostics.AddError("could not get bucket location", err.Error())
 		return
 	}
 
+	// get bucket placement rule
+	bucket := admin.Bucket{
+		Bucket: data.Id.ValueString(),
+	}
+	bucket, err = r.client.Admin.GetBucketInfo(context.Background(), bucket)
+	if err != nil {
+		if errors.Is(err, admin.ErrNoSuchBucket) {
+			// Remove bucket quota from state
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		resp.Diagnostics.AddError("could not get bucket quota", err.Error())
+		return
+	}
+
+	location := fmt.Sprintf("%s:%s", s3resp.LocationConstraint, bucket.PlacementRule)
+
 	data.Name = types.StringValue(*s3req.Bucket)
+	data.Location = types.StringValue(location)
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
