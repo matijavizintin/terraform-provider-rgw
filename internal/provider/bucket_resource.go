@@ -149,6 +149,9 @@ func (r *BucketResource) Read(ctx context.Context, req resource.ReadRequest, res
 			case "403":
 				resp.Diagnostics.AddError("no permission to get bucket", err.Error())
 				return
+			case "BucketNotEmpty":
+				resp.Diagnostics.AddError("bucket needs to be empty", err.Error())
+				return
 			}
 		}
 		resp.Diagnostics.AddError("could not get bucket location", err.Error())
