@@ -129,14 +129,17 @@ func (r *BucketPolicyResource) Read(ctx context.Context, req resource.ReadReques
 		if errors.As(err, &ae) {
 			switch ae.ErrorCode() {
 			case "403":
-				resp.Diagnostics.AddError("acces denied", "If you are using an identity other than the root user of the Amazon Web Services account that owns the bucket, the calling identity must have the GetBucketPolicy permissions on the specified bucket and belong to the bucket owner's account in order to use this operation")
+				resp.Diagnostics.AddError("access denied", "If you are using an identity other than the root user of the Amazon Web Services account that owns the bucket, the calling identity must have the GetBucketPolicy permissions on the specified bucket and belong to the bucket owner's account in order to use this operation")
 				return
 			case "405":
 				resp.Diagnostics.AddError("wrong identity", "If you have the correct permissions, but you're not using an identity that belongs to the bucket owner's account, Amazon S3 returns a 405 Method Not Allowed error.")
 				return
+			case "NoSuchBucketPolicy":
+				resp.State.RemoveResource(ctx)
+				return
 			}
 		}
-		resp.Diagnostics.AddError("could not get bucket policy", err.Error())
+		resp.Diagnostics.AddError(fmt.Sprintf("could not get bucket policy: %s", ae.ErrorCode()), err.Error())
 		return
 	}
 
