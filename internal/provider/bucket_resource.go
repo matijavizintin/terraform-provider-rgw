@@ -143,7 +143,7 @@ func (r *BucketResource) Read(ctx context.Context, req resource.ReadRequest, res
 		var ae smithy.APIError
 		if errors.As(err, &ae) {
 			switch ae.ErrorCode() {
-			case "404":
+			case "NoSuchBucket":
 				resp.State.RemoveResource(ctx)
 				return
 			case "403":
